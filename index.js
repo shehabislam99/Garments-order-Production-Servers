@@ -233,7 +233,6 @@ app.get("/profile", verifyFBToken, async (req, res) => {
       });
     });
 
-    //DashBoard admin all api
     app.get("/admin/stats", verifyFBToken, verifyAdmin, async (req, res) => {
       const allProducts = await productCollection.countDocuments({});
 
