@@ -51,7 +51,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const db = client.db("Garments_production");
     const userCollection = db.collection("user");
     const productCollection = db.collection("products");
@@ -169,20 +169,21 @@ async function run() {
     });
 
     //Profile
-    app.get("/auth/profile", verifyFBToken, async (req, res) => {
-      const email = req.decoded_email;
+app.get("/profile", verifyFBToken, async (req, res) => {
 
-      const user = await userCollection.findOne({ email });
+    const email = req.decoded_email;
+    const user = await userCollection.findOne({ email });
+    
+    const { password, ...userData } = user;
 
-      if (!user) {
-        return res.status(404).send({ message: "User not found" });
-      }
-
-      res.send({
-        success: true,
-        data: user,
-      });
+    res.status(200).json({
+      success: true,
+      data: userData,
     });
+
+  
+});
+
 
     //tracking ID genarated
     const generateTrackingId = () => {
@@ -201,7 +202,7 @@ async function run() {
       const order = {
         ...orderData,
         trackingId,
-        status:"pending",
+        status: "pending",
         paymentStatus: isStripe ? "paid" : "cod",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -602,20 +603,13 @@ async function run() {
 
     //Role update in frontend
     app.patch(
-      "/admin/users/role/:id",
+      "/users/role/:id",
       verifyFBToken,
       verifyAdmin,
       async (req, res) => {
         const { id } = req.params;
         const { role } = req.body;
-        const user = await userCollection.findOne({ _id: new ObjectId(id) });
-
-        if (!user) {
-          return res.status(404).json({
-            success: false,
-            message: "User not found",
-          });
-        }
+       await userCollection.findOne({ _id: new ObjectId(id) });
 
         await userCollection.updateOne(
           { _id: new ObjectId(id) },
@@ -632,7 +626,7 @@ async function run() {
 
     //user status suspend and approve in frontend
     app.patch(
-      "/admin/users/status/:id",
+      "/users/status/:id",
       verifyFBToken,
       verifyAdmin,
       async (req, res) => {
@@ -717,10 +711,18 @@ async function run() {
 
     app.post("/products", async (req, res) => {
       const product = req.body;
-      product.createdAt = new Date();
-      console.log(product);
-      const result = await productCollection.insertOne(product);
+      const newProduct = {
+        ...product,
+        createdAt: new Date(),
+      };
+      const result = await productCollection.insertOne(newProduct);
       res.send(result);
+      console.log("Product data:", req.body);
+      res.json({
+        success: true,
+        message: "Product received",
+        data: req.body,
+      });
     });
 
 
@@ -763,6 +765,7 @@ async function run() {
       const formattedProducts = products.map((product) => ({
         _id: product._id,
         product_name: product.product_name,
+        createdBy: product.createdByEmail,
         price: product.price,
         images: product.images,
         category: product.category,
@@ -815,7 +818,7 @@ async function run() {
     });
 
    
-app.put("/order/status/:id", async (req, res) => {
+app.put("/orders/status/:id",verifyFBToken,verifyManager, async (req, res) => {
     const { id } = req.params;
     const { status, rejectionReason, approvedAt, rejectedAt } = req.body;
 
@@ -1172,7 +1175,7 @@ app.get("/track-order/:orderId/timeline", verifyFBToken, async (req, res) => {
    
 
    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     
   } finally {
     // Ensures that the client will close when you finish/error
