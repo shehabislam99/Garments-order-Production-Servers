@@ -335,7 +335,7 @@ app.get("/profile", verifyFBToken, async (req, res) => {
       }
     );
 
-    //DashBoard manager all api
+  
     app.get(
       "/manager/stats",
       verifyFBToken,
