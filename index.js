@@ -1140,7 +1140,7 @@ app.get("/track-order/:orderId/timeline", verifyFBToken, async (req, res) => {
       });
     }
 
-    // Map the history to match frontend expectations
+    // Map the history to match frontend expectation
     const timeline = trackingDoc.history.map((log, index) => ({
       id: index,
       step: log.status,
