@@ -726,63 +726,65 @@ app.get("/profile", verifyFBToken, async (req, res) => {
 
 
     // PRODUCT WITH FILTERS, PAGINATION IN FRONTEND
-    app.get("/products", async (req, res) => {
-      const {
-        searchText = "",
-        page = 1,
-        limit = 10,
-        category = "all",
-        status = "all",
-      } = req.query;
+   app.get("/products", async (req, res) => {
+     const {
+       searchText = "",
+       page = 1,
+       limit = 10,
+       category = "all",
+       Pstatus = "all",
+     } = req.query;
 
-      const filterQuery = {
-        ...(searchText && {
-          $or: [
-            { product_name: { $regex: searchText, $options: "i" } },
-            { description: { $regex: searchText, $options: "i" } },
-            { category: { $regex: searchText, $options: "i" } },
-          ],
-        }),
-        ...(category !== "all" && { category }),
-        ...(status === "show" && { showOnHome: true }),
-        ...(status === "hide" && { showOnHome: false }),
-      };
+     const filterQuery = {
+       ...(searchText && {
+         $or: [
+           { product_name: { $regex: searchText, $options: "i" } },
+           { description: { $regex: searchText, $options: "i" } },
+           { category: { $regex: searchText, $options: "i" } },
+         ],
+       }),
+       ...(category !== "all" && { category }),
+       ...(Pstatus === "show" && { show_on_homepage: true }),
+       ...(Pstatus === "hide" && { show_on_homepage: false }),
+     };
 
-      const skip = (page - 1) * limit;
+     const skip = (page - 1) * limit;
 
-      const [products, total] = await Promise.all([
-        productCollection
-          .find(filterQuery)
-          .sort({ createdAt: -1 })
-          .skip(Number(skip))
-          .limit(Number(limit))
-          .toArray(),
+     const [products, total] = await Promise.all([
+       productCollection
+         .find(filterQuery)
+         .sort({ createdAt: -1 })
+         .skip(Number(skip))
+         .limit(Number(limit))
+         .toArray(),
 
-        productCollection.countDocuments(filterQuery),
-      ]);
+       productCollection.countDocuments(filterQuery),
+     ]);
 
-      const formattedProducts = products.map((product) => ({
-        _id: product._id,
-        product_name: product.product_name,
-        createdBy: product.createdByEmail,
-        price: product.price,
-        images: product.images,
-        category: product.category,
-        showOnHome: product.showOnHome || false,
-        payment_Options: product.payment_Options,
-        demo_video_link: product.demo_video_link,
-        available_quantity: product.available_quantity,
-      }));
+     const formattedProducts = products.map((product) => ({
+       _id: product._id,
+       product_name: product.product_name,
+       description: product.description,
+       createdBy: product.createdByEmail,
+       price: product.price,
+       images: product.images,
+       category: product.category,
+       show_on_homepage: product.show_on_homepage || false,
+       payment_Options: product.payment_Options,
+       demo_video_link: product.demo_video_link,
+       available_quantity: product.available_quantity,
+     }));
 
-      res.status(200).json({
-        success: true,
-        data: formattedProducts,
-        total: total,
-        page: parseInt(page),
-        totalPages: Math.ceil(total / parseInt(limit)),
-        limit: parseInt(limit),
-      });
-    });
+     res.status(200).json({
+       success: true,
+       data: formattedProducts,
+       total,
+       page: parseInt(page),
+       totalPages: Math.ceil(total / parseInt(limit)),
+       limit: parseInt(limit),
+     });
+   });
+
 
     // get single product
     app.get("/products/:id", async (req, res) => {
