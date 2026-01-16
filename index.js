@@ -259,36 +259,7 @@ app.get("/profile", verifyFBToken, async (req, res) => {
         },
       });
     });
-    // show on home
-    app.patch(
-      "/admin/products/show-on-home/:id",
-      verifyFBToken,
-      verifyAdmin,
-      async (req, res) => {
-        const { id } = req.params;
-        const { showOnHome } = req.body;
 
-        const result = await productCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { showOnHome: showOnHome, updatedAt: new Date() } }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({
-            success: false,
-            message: "Product not found",
-          });
-        }
-
-        res.status(200).json({
-          success: true,
-          message: showOnHome
-            ? "Product is now shown on home page"
-            : "Product removed from home page",
-          data: { showOnHome },
-        });
-      }
-    );
     //  Update product
     app.put(
       "/products/:id",
@@ -297,20 +268,9 @@ app.get("/profile", verifyFBToken, async (req, res) => {
       async (req, res) => {
         const { id } = req.params;
         const updateData = req.body;
-        const filteredUpdateData = {
-          name: updateData.name,
-          description: updateData.description || "",
-          price: parseFloat(updateData.price),
-          category: updateData.category,
-          images: updateData.images || [],
-          demoVideo: updateData.demoVideo || "",
-          paymentOptions: updateData.paymentOptions || [],
-          updatedAt: new Date(),
-        };
-
         const result = await productCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: filteredUpdateData }
+          { $set: updateData }
         );
 
         const updatedProduct = await productCollection.findOne({
@@ -343,14 +303,9 @@ app.get("/profile", verifyFBToken, async (req, res) => {
       async (req, res) => {
         const allProducts = await productCollection.countDocuments({});
 
-        const allOrders = await orderCollection.countDocuments({
-          payment_options: { $ne: "PayFirst" },
+        const approvedOrders = await orderCollection.countDocuments({
+          payment_status: "approved",
         });
-        const allUsers = await userCollection.countDocuments({});
-
-        const totalRevenue = await paymentCollection
-          .aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }])
-          .toArray();
 
         const pendingOrders = await orderCollection.countDocuments({
           payment_status: "pending",
@@ -360,9 +315,7 @@ app.get("/profile", verifyFBToken, async (req, res) => {
           data: {
             allProducts,
             pendingOrders,
-            allUsers,
-            allOrders,
-            totalRevenue: totalRevenue[0]?.total || 0,
+            approvedOrders,
           },
         });
       }
@@ -770,7 +723,9 @@ app.get("/profile", verifyFBToken, async (req, res) => {
        images: product.images,
        category: product.category,
        show_on_homepage: product.show_on_homepage || false,
-       payment_Options: product.payment_Options,
+       payment_Options: Array.isArray(product.payment_Options)
+         ? product.payment_Options.join(" and ")
+         : product.payment_Options,
        demo_video_link: product.demo_video_link,
        available_quantity: product.available_quantity,
      }));
@@ -810,6 +765,7 @@ app.get("/profile", verifyFBToken, async (req, res) => {
           : [],
         available_quantity: product.available_quantity,
         moq: product.moq,
+        demo_video_link: product.demo_video_link
       };
 
       res.json({
