@@ -232,7 +232,7 @@ app.get("/profile", verifyFBToken, async (req, res) => {
         message: "Order created successfully",
       });
     });
-app.get("/order/:id", verifyFBToken, async (req, res) => {
+app.get("/order/:id", verifyFBToken,verifyManager, async (req, res) => {
   try {
     const { id } = req.params;
     const order = await orderCollection.findOne({ _id: new ObjectId(id) });
@@ -1123,21 +1123,31 @@ app.post(
 
   
 app.get("/track-order/timeline/:orderId", verifyFBToken, async (req, res) => {
-  const { orderId } = req.params;
+    const { orderId } = req.params;
 
-  try {
-    const trackingDoc = await trackingCollection.findOne({
-      orderId: new ObjectId(orderId),
+    const orderData = await orderCollection.findOne({
+      $or: [{ _id: new ObjectId(orderId) }, { orderId }],
     });
 
-    if (!trackingDoc) {
+    if (!orderData) {
       return res.status(404).json({
         success: false,
-        message: "No tracking history found for this order",
+        message: "Order not found",
       });
     }
 
-    // Map the history to match frontend expectation
+    const trackingDoc = await trackingCollection.findOne({
+      orderId: orderData._id,
+    });
+
+    if (!trackingDoc) {
+      return res.status(200).json({
+        success: true,
+        data: { order: orderData, timeline: [] },
+        message: "No tracking history found",
+      });
+    }
+
     const timeline = trackingDoc.history.map((log, index) => ({
       id: index,
       step: log.status,
@@ -1146,28 +1156,24 @@ app.get("/track-order/timeline/:orderId", verifyFBToken, async (req, res) => {
       status:
         log.status === "product_delivered"
           ? "completed"
-          : index === 0 // First item is most recent
+          : index === trackingDoc.history.length - 1
           ? "current"
           : "completed",
-      date: log.dateTime, // Use dateTime field from database
+      date: log.dateTime,
     }));
 
-    // Reverse to show newest first
-    timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
+    const sortedTimeline = timeline.sort(
+      (a, b) => new Date(b.date) - new Date(a.date)
+    );
 
     res.status(200).json({
       success: true,
-      data: timeline,
+      data: { order: orderData, timeline: sortedTimeline },
       message: "Timeline fetched successfully",
     });
-  } catch (error) {
-    console.error("Error fetching timeline:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch tracking timeline",
-    });
-  }
+  
 });
+
    
 
    // Send a ping to confirm a successful connection
