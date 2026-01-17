@@ -233,7 +233,7 @@ app.get("/profile", verifyFBToken, async (req, res) => {
       });
     });
 app.get("/order/:id", verifyFBToken,verifyManager, async (req, res) => {
-  try {
+ 
     const { id } = req.params;
     const order = await orderCollection.findOne({ _id: new ObjectId(id) });
     if (!order) {
@@ -251,9 +251,6 @@ app.get("/order/:id", verifyFBToken,verifyManager, async (req, res) => {
       success: true,
       data: order,
     });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
 });
     app.get("/admin/stats", verifyFBToken, verifyAdmin, async (req, res) => {
       const allProducts = await productCollection.countDocuments({});
@@ -411,35 +408,37 @@ app.get("/order/:id", verifyFBToken,verifyManager, async (req, res) => {
       });
     })
     //  Update product
-    app.put(
-      "/products/:id",
-      verifyFBToken,
-      verifyAdminOrManager,
-      async (req, res) => {
-           const { id } = req.params;
-           const email = req.decoded_email;
-           const updateData = req.body;
+   app.put(
+     "/products/:id",
+     verifyFBToken,
+     verifyAdminOrManager,
+     async (req, res) => {
+       const { id } = req.params;
+       const role = req.decoded_role; 
+       const email = req.decoded_email;
+       const updateData = req.body;
 
-           const filter = {
-             _id: new ObjectId(id),
-             ...(email && { createdByEmail: email }), 
-           };
+       let filter = { _id: new ObjectId(id) };
+       if (role === "user") {
+         filter.createdByEmail = email;
+       }
 
-           const result = await productCollection.updateOne(filter, {
-             $set: updateData,
-           });
+       const result = await productCollection.updateOne(filter, {
+         $set: updateData,
+       });
 
-        const updatedProduct = await productCollection.findOne({
-          _id: new ObjectId(id),
-        });
+       const updatedProduct = await productCollection.findOne({
+         _id: new ObjectId(id),
+       });
 
-        res.status(200).json({
-          success: true,
-          message: "Product updated successfully",
-          data: updatedProduct,
-        });
-      }
-    );
+       res.status(200).json({
+         success: true,
+         message: "Product updated successfully",
+         data: updatedProduct,
+       });
+     }
+   );
+
     // Delete product
     app.delete(
       "/products/:id",
@@ -740,7 +739,40 @@ app.get("/order/:id", verifyFBToken,verifyManager, async (req, res) => {
         });
       }
     );
+app.patch(
+  "/admin/products/show-on-home/:id",
+  verifyFBToken,
+  verifyAdmin,
+  async (req, res) => {
+    const { id } = req.params;
+    const { show_on_homepage } = req.body;
 
+    const result = await productCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          show_on_homepage: show_on_homepage,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: show_on_homepage
+        ? "Product is now shown on home page"
+        : "Product removed from home page",
+      data: { show_on_homepage },
+    });
+  }
+);
     //user status suspend and approve in frontend
     app.patch(
       "/users/status/:id",
@@ -1029,45 +1061,61 @@ app.post(
       });
     });
 
-    app.patch(
-      "/admin/orders/status/:id",
-      verifyFBToken,
-      verifyAdmin,
-      async (req, res) => {
-        const { id } = req.params;
-        const { status } = req.body;
-        const validStatuses = [
-          "pending",
-          "approved",
-          "rejected",
-          "delivered",
-          "cancelled",
-        ];
+app.get(
+  "/admin/orderTracking/:orderId",
+  verifyFBToken,
+  verifyAdmin,
+  async (req, res) => {
+    const { orderId } = req.params;
 
-        const result = await orderCollection.updateOne(
-          { _id: new ObjectId(id) },
-          {
-            $set: {
-              status: status,
-              updatedAt: new Date(),
-            },
-          }
-        );
+    const orderData = await orderCollection.findOne({
+      $or: [{ _id: new ObjectId(orderId) }, { orderId }],
+    });
 
-        if (result.matchedCount === 0) {
-          return res.status(404).json({
-            success: false,
-            message: "Order not found",
-          });
-        }
+    if (!orderData) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
 
-        res.status(200).json({
-          success: true,
-          message: `Order status updated to ${status}`,
-          data: { status },
-        });
-      }
+    const trackingDoc = await trackingCollection.findOne({
+      orderId: orderData._id,
+    });
+
+    if (!trackingDoc) {
+      return res.status(200).json({
+        success: true,
+        data: { order: orderData, timeline: [] },
+        message: "No tracking history found",
+      });
+    }
+
+    const timeline = trackingDoc.history.map((log, index) => ({
+      id: index,
+      step: log.status,
+      Note: log.note || "No additional details",
+      location: log.location || "Unknown",
+      status:
+        log.status === "product_delivered"
+          ? "completed"
+          : index === trackingDoc.history.length - 1
+          ? "current"
+          : "completed",
+      date: log.dateTime,
+    }));
+
+    const sortedTimeline = timeline.sort(
+      (a, b) => new Date(b.date) - new Date(a.date)
     );
+
+    res.status(200).json({
+      success: true,
+      data: { order: orderData, timeline: sortedTimeline },
+      message: "Timeline fetched successfully",
+    });
+  }
+);
 
     // Add a GET endpoint for fetching role (better for AuthProvider)
     app.get("/users/role/:email", async (req, res) => {
