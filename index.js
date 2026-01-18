@@ -451,11 +451,13 @@ async function run() {
       verifyFBToken,
       verifyAdminOrManager,
       async (req, res) => {
-        const email = req.decoded_email;
-        const filter = {
-          _id: new ObjectId(req.params.id),
-          ...(email && { createdByEmail: email }),
-        };
+         const { id } = req.params;
+         const role = req.decoded_role;
+         const email = req.decoded_email;
+         let filter = { _id: new ObjectId(id) };
+         if (role === "user") {
+           filter.createdByEmail = email;
+         }
 
         const result = await productCollection.deleteOne(filter);
         res.json({ success: true });
@@ -463,37 +465,33 @@ async function run() {
     );
 
     //manager stats
-    app.get(
-      "/manager/stats",
-      verifyFBToken,
-      verifyManager,
-      async (req, res) => {
-        const email = req.decoded_email;
+app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
+  const email = req.decoded_email;
 
-        const allProducts = await productCollection.countDocuments({
-          createdByEmail: email,
-        });
+      const allProducts = await productCollection.countDocuments({
+        createdByEmail: email,
+      });
 
-        const approvedOrders = await orderCollection.countDocuments({
-          payment_status: "approved",
-          buyer_email: email,
-        });
+     
+      const approvedOrders = await orderCollection.countDocuments({
+        status: "approved",
+      });
 
-        const pendingOrders = await orderCollection.countDocuments({
-          payment_status: "pending",
-          buyer_email: email,
-        });
-        res.send({
-          success: true,
-          data: {
-            allProducts,
-            pendingOrders,
-            approvedOrders,
-          },
-        });
-      }
-    );
+      const pendingOrders = await orderCollection.countDocuments({
+        status: "pending",
+      });
 
+
+    res.send({
+      success: true,
+      data: {
+        allProducts,
+        pendingOrders,
+        approvedOrders,
+      },
+    });
+
+});
     // buyer stats
     app.get("/buyer/stats", verifyFBToken, async (req, res) => {
       const email = req.decoded_email;
