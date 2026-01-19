@@ -634,16 +634,44 @@ app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
         .skip(skip)
         .limit(pageSize)
         .toArray();
-
+ const transformedUsers = users.map((user) => ({
+   ...user,
+   photoURL: user.photoURL || "https://i.ibb.co/0jZqyvJ/user.png",
+ }));
       res.status(200).json({
         success: true,
-        data: users,
+        data: transformedUsers,
         total,
         totalPages: Math.ceil(total / pageSize),
         currentPage: pageNumber,
         perPage: pageSize,
       });
     });
+
+
+app.get("/users/email/:email", async (req, res) => {
+  const email = req.params.email;
+  const user = await userCollection.findOne({ email: email });
+
+ if (!user) {
+   return res.status(200).json({
+     success: false,
+     data: null,
+     message: "User not found",
+   });
+ }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      photoURL: user.photoURL,
+      role: user.role,
+    },
+  });
+});
 
     //Role update admin
     app.patch(
