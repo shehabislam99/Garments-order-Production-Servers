@@ -1074,7 +1074,7 @@ app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
       }
     );
 
-    // Send a ping to confirm a successful connection
+    // Send ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
   } finally {
     // Ensures that the client will close when you finish/error
