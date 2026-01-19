@@ -227,7 +227,7 @@ async function run() {
       });
     });
 
-    //manager order details
+    //manager order detail
     app.get("/order/:id", verifyFBToken, verifyManager, async (req, res) => {
       const { id } = req.params;
       const order = await orderCollection.findOne({ _id: new ObjectId(id) });
