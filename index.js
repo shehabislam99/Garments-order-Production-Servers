@@ -561,7 +561,7 @@ app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
       });
     });
 
-    // Cancel Buyer order
+    // Cancel Buyer orders
     app.patch("/my-orders/cancel/:id", verifyFBToken, async (req, res) => {
       const { id } = req.params;
       const email = req.decoded_email;
