@@ -4,12 +4,14 @@ const app = express();
 require("dotenv").config();
 const port = process.env.PORT || 3000;
 const crypto = require("crypto");
+const bcrypt = require("bcryptjs"); 
+const jwt = require("jsonwebtoken"); 
 
 //keyConverter
 const admin = require("firebase-admin");
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
-  "utf8"
-); 
+  "utf8",
+);
 const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
@@ -19,6 +21,53 @@ admin.initializeApp({
 //middleware
 app.use(express.json());
 app.use(cors());
+
+
+
+
+
+const validateUserInput = (req, res, next) => {
+  const { name, email, password, role } = req.body;
+
+  // Name validation
+  if (!name || name.length < 2 || name.length > 50) {
+    return res.status(400).json({
+      success: false,
+      message: "Name must be between 2 and 50 characters",
+    });
+  }
+
+  // Email validation
+  const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
+  if (!email || !emailRegex.test(email)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please enter a valid email",
+    });
+  }
+
+  // Password validation
+  if (password) {
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: passwordValidation.errors.join(", "),
+      });
+    }
+  }
+
+  // Role validation
+  if (role && !["buyer", "manager", "admin"].includes(role)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid role specified",
+    });
+  }
+
+  next();
+};
+
 
 const verifyFBToken = async (req, res, next) => {
   const token = req.headers.authorization;
@@ -30,13 +79,62 @@ const verifyFBToken = async (req, res, next) => {
   try {
     const idToken = token.split(" ")[1];
     const decoded = await admin.auth().verifyIdToken(idToken);
-  
+
     req.decoded_email = decoded.email;
     next();
   } catch (err) {
     return res.status(401).send({ message: "unauthorized access" });
   }
 };
+
+// JWT Token generation
+const generateToken = (id, role) => {
+  return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+    expiresIn: "30d",
+  });
+};
+
+// Role-based authorization middleware
+const verifyAdmin = async (req, res, next) => {
+  const email = req.decoded_email;
+  const query = { email };
+  const user = await userCollection.findOne(query);
+
+  if (!user || user.role !== "admin") {
+    return res.status(403).send({ message: "forbidden access" });
+  }
+
+  next();
+};
+
+const verifyManager = async (req, res, next) => {
+  const email = req.decoded_email;
+  const query = { email };
+  const user = await userCollection.findOne(query);
+
+  if (!user || user.role !== "manager") {
+    return res.status(403).send({ message: "forbidden access" });
+  }
+
+  next();
+};
+
+const verifyAdminOrManager = async (req, res, next) => {
+  const email = req.decoded_email;
+
+  const user = await userCollection.findOne({ email });
+
+  if (user?.role === "admin" || user?.role === "manager") {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: "Forbidden access",
+  });
+};
+
+
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -59,43 +157,281 @@ async function run() {
     const paymentCollection = db.collection("payment");
     const trackingCollection = db.collection("tracking");
 
-    // verifyFBToken middleware
-    const verifyAdmin = async (req, res, next) => {
-      const email = req.decoded_email;
-      const query = { email };
-      const user = await userCollection.findOne(query);
 
-      if (!user || user.role !== "admin") {
-        return res.status(403).send({ message: "forbidden access" });
+
+    /**
+     * REGISTRATION ENDPOINT
+     * Creates a new user with proper validation and password hashing
+     * Compatible with your frontend Register component
+     */
+    app.post("/api/auth/register", validateUserInput, async (req, res) => {
+      try {
+        const { name, email, password, photoURL, role = "buyer" } = req.body;
+
+        // Check if user already exists
+        const existingUser = await userCollection.findOne({ email });
+        if (existingUser) {
+          return res.status(400).json({
+            success: false,
+            message: "User already exists with this email",
+          });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Create user object
+        const newUser = {
+          name,
+          email,
+          password: hashedPassword,
+          photoURL: photoURL || "https://i.ibb.co/0jZqyvJ/user.png",
+          role,
+          isActive: true,
+          status: "active",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          lastLogin: null,
+        };
+
+        // Insert user into database
+        const result = await userCollection.insertOne(newUser);
+
+        // Generate JWT token
+        const token = generateToken(result.insertedId, role);
+
+        // Remove password from response
+        const { password: _, ...userWithoutPassword } = newUser;
+
+        res.status(201).json({
+          success: true,
+          message: "User created successfully",
+          data: {
+            ...userWithoutPassword,
+            _id: result.insertedId,
+          },
+          token,
+        });
+      } catch (error) {
+        console.error("Registration error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Server error during registration",
+        });
       }
+    });
 
-      next();
-    };
-    const verifyManager = async (req, res, next) => {
-      const email = req.decoded_email;
-      const query = { email };
-      const user = await userCollection.findOne(query);
+    /**
+     * LOGIN ENDPOINT
+     * Authenticates user and returns JWT token
+     */
+    app.post("/api/auth/login", async (req, res) => {
+      try {
+        const { email, password } = req.body;
 
-      if (!user || user.role !== "manager") {
-        return res.status(403).send({ message: "forbidden access" });
+        // Find user by email
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(401).json({
+            success: false,
+            message: "Invalid email or password",
+          });
+        }
+
+        // Check if user is active
+        if (user.status === "suspended") {
+          return res.status(403).json({
+            success: false,
+            message: user.suspendFeedback || "Your account has been suspended",
+          });
+        }
+
+        // Verify password
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+          return res.status(401).json({
+            success: false,
+            message: "Invalid email or password",
+          });
+        }
+
+        // Update last login
+        await userCollection.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              lastLogin: new Date(),
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        // Generate token
+        const token = generateToken(user._id, user.role);
+
+        // Remove password from response
+        const { password: _, ...userWithoutPassword } = user;
+
+        res.json({
+          success: true,
+          message: "Login successful",
+          data: userWithoutPassword,
+          token,
+        });
+      } catch (error) {
+        console.error("Login error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Server error during login",
+        });
       }
+    });
 
-      next();
-    };
-    const verifyAdminOrManager = async (req, res, next) => {
-      const email = req.decoded_email;
+    /**
+     * GET CURRENT USER
+     * Returns the authenticated user's data
+     */
+    app.get("/api/auth/me", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const user = await userCollection.findOne(
+          { email },
+          { projection: { password: 0 } },
+        );
 
-      const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found",
+          });
+        }
 
-      if (user?.role === "admin" || user?.role === "manager") {
-        return next();
+        res.json({
+          success: true,
+          data: user,
+        });
+      } catch (error) {
+        console.error("Get user error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Server error",
+        });
       }
+    });
 
-      return res.status(403).json({
-        success: false,
-        message: "Forbidden access",
-      });
-    };
+    /**
+     * UPDATE USER PROFILE
+     */
+    app.patch("/api/auth/profile", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const { name, photoURL } = req.body;
+
+        const updateData = {
+          ...(name && { name }),
+          ...(photoURL && { photoURL }),
+          updatedAt: new Date(),
+        };
+
+        const result = await userCollection.updateOne(
+          { email },
+          { $set: updateData },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const updatedUser = await userCollection.findOne(
+          { email },
+          { projection: { password: 0 } },
+        );
+
+        res.json({
+          success: true,
+          message: "Profile updated successfully",
+          data: updatedUser,
+        });
+      } catch (error) {
+        console.error("Profile update error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Server error",
+        });
+      }
+    });
+
+    /**
+     * CHANGE PASSWORD
+     */
+    app.patch("/api/auth/change-password", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const { currentPassword, newPassword } = req.body;
+
+        // Validate new password
+        const passwordValidation = validatePassword(newPassword);
+        if (!passwordValidation.isValid) {
+          return res.status(400).json({
+            success: false,
+            message: passwordValidation.errors.join(", "),
+          });
+        }
+
+        // Get user with password
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        // Verify current password
+        const isPasswordValid = await bcrypt.compare(
+          currentPassword,
+          user.password,
+        );
+        if (!isPasswordValid) {
+          return res.status(401).json({
+            success: false,
+            message: "Current password is incorrect",
+          });
+        }
+
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        // Update password
+        await userCollection.updateOne(
+          { email },
+          {
+            $set: {
+              password: hashedPassword,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.json({
+          success: true,
+          message: "Password changed successfully",
+        });
+      } catch (error) {
+        console.error("Password change error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Server error",
+        });
+      }
+    });
+
+   
 
     // payment related api
     app.post("/payment-checkout-session", verifyFBToken, async (req, res) => {
@@ -155,7 +491,7 @@ async function run() {
             paidAt: new Date(),
             updatedAt: new Date(),
           },
-        }
+        },
       );
 
       res.json({
@@ -230,7 +566,7 @@ async function run() {
     //manager order detail
     app.get("/order/:id", verifyFBToken, verifyManager, async (req, res) => {
       const { id } = req.params;
-      const order = await orderCollection.findOne({ _id: new ObjectId(id) });
+      let order = await orderCollection.findOne({ _id: new ObjectId(id) });
       if (!order) {
         order = await orderCollection.findOne({
           orderId: id,
@@ -340,8 +676,9 @@ async function run() {
         images: product.images,
         category: product.category,
         show_on_homepage: product.show_on_homepage || false,
-        payment_Options: Array.isArray(product.payment_Options)
-          ? product.payment_Options.join(" and ")
+        payment_Options:
+          Array.isArray(product.payment_Options) ?
+            product.payment_Options.join(" and ")
           : product.payment_Options,
         demo_video_link: product.demo_video_link,
         available_quantity: product.available_quantity,
@@ -374,10 +711,10 @@ async function run() {
         price: product.price,
         images: Array.isArray(product.images) ? product.images : [],
         category: product.category,
-        payment_Options: Array.isArray(product.payment_Options)
-          ? product.payment_Options
-          : typeof product.payment_Options === "string"
-          ? product.payment_Options.split(",")
+        payment_Options:
+          Array.isArray(product.payment_Options) ? product.payment_Options
+          : typeof product.payment_Options === "string" ?
+            product.payment_Options.split(",")
           : [],
         available_quantity: product.available_quantity,
         moq: product.moq,
@@ -402,15 +739,16 @@ async function run() {
           .toArray();
         const formattedProducts = products.map((product) => ({
           ...product,
-          payment_Options: Array.isArray(product.payment_Options)
-            ? product.payment_Options.join(" and ")
+          payment_Options:
+            Array.isArray(product.payment_Options) ?
+              product.payment_Options.join(" and ")
             : product.payment_Options,
         }));
         res.status(200).json({
           success: true,
           data: formattedProducts,
         });
-      }
+      },
     );
 
     //  Update product manager and admin
@@ -442,7 +780,7 @@ async function run() {
           message: "Product updated successfully",
           data: updatedProduct,
         });
-      }
+      },
     );
 
     // Delete product manager and admin
@@ -451,47 +789,49 @@ async function run() {
       verifyFBToken,
       verifyAdminOrManager,
       async (req, res) => {
-         const { id } = req.params;
-         const role = req.decoded_role;
-         const email = req.decoded_email;
-         let filter = { _id: new ObjectId(id) };
-         if (role === "user") {
-           filter.createdByEmail = email;
-         }
+        const { id } = req.params;
+        const role = req.decoded_role;
+        const email = req.decoded_email;
+        let filter = { _id: new ObjectId(id) };
+        if (role === "user") {
+          filter.createdByEmail = email;
+        }
 
         const result = await productCollection.deleteOne(filter);
         res.json({ success: true });
-      }
+      },
     );
 
     //manager stats
-app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
-  const email = req.decoded_email;
+    app.get(
+      "/manager/stats",
+      verifyFBToken,
+      verifyManager,
+      async (req, res) => {
+        const email = req.decoded_email;
 
-      const allProducts = await productCollection.countDocuments({
-        createdByEmail: email,
-      });
+        const allProducts = await productCollection.countDocuments({
+          createdByEmail: email,
+        });
 
-     
-      const approvedOrders = await orderCollection.countDocuments({
-        status: "approved",
-      });
+        const approvedOrders = await orderCollection.countDocuments({
+          status: "approved",
+        });
 
-      const pendingOrders = await orderCollection.countDocuments({
-        status: "pending",
-      });
+        const pendingOrders = await orderCollection.countDocuments({
+          status: "pending",
+        });
 
-
-    res.send({
-      success: true,
-      data: {
-        allProducts,
-        pendingOrders,
-        approvedOrders,
+        res.send({
+          success: true,
+          data: {
+            allProducts,
+            pendingOrders,
+            approvedOrders,
+          },
+        });
       },
-    });
-
-});
+    );
     // buyer stats
     app.get("/buyer/stats", verifyFBToken, async (req, res) => {
       const email = req.decoded_email;
@@ -582,24 +922,65 @@ app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
             status: "cancelled",
             updatedAt: new Date(),
           },
-        }
+        },
       );
 
       res.json({ success: true });
     });
 
-    // post user in database
+    /**
+     * UPDATED USER CREATION ENDPOINT
+     * Now with password hashing and validation
+     * Keep this for backward compatibility with your frontend
+     */
     app.post("/users", async (req, res) => {
-      const userInfo = req.body;
-      userInfo.createdAt = new Date();
-      userInfo.status = "pending";
+      try {
+        const userInfo = req.body;
 
-      const result = await userCollection.insertOne(userInfo);
-      res.status(201).send({
-        message: "User created successfully",
-        inserted: true,
-        result,
-      });
+        // Check if user already exists
+        const existingUser = await userCollection.findOne({
+          email: userInfo.email,
+        });
+        if (existingUser) {
+          return res.status(400).json({
+            success: false,
+            message: "User already exists with this email",
+          });
+        }
+
+        // Hash password if provided
+        if (userInfo.password) {
+          const salt = await bcrypt.genSalt(10);
+          userInfo.password = await bcrypt.hash(userInfo.password, salt);
+        }
+
+        userInfo.createdAt = new Date();
+        userInfo.status = "active";
+        userInfo.updatedAt = new Date();
+        userInfo.photoURL =
+          userInfo.photoURL || "https://i.ibb.co/0jZqyvJ/user.png";
+
+        const result = await userCollection.insertOne(userInfo);
+
+        // Remove password from response
+        const { password, ...userWithoutPassword } = userInfo;
+
+        res.status(201).send({
+          success: true,
+          message: "User created successfully",
+          inserted: true,
+          data: {
+            ...userWithoutPassword,
+            _id: result.insertedId,
+          },
+        });
+      } catch (error) {
+        console.error("User creation error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Server error during user creation",
+        });
+      }
     });
 
     // get user in frontend
@@ -634,10 +1015,11 @@ app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
         .skip(skip)
         .limit(pageSize)
         .toArray();
- const transformedUsers = users.map((user) => ({
-   ...user,
-   photoURL: user.photoURL || "https://i.ibb.co/0jZqyvJ/user.png",
- }));
+
+      const transformedUsers = users.map((user) => ({
+        ...user,
+        photoURL: user.photoURL || "https://i.ibb.co/0jZqyvJ/user.png",
+      }));
       res.status(200).json({
         success: true,
         data: transformedUsers,
@@ -648,30 +1030,32 @@ app.get("/manager/stats", verifyFBToken, verifyManager, async (req, res) => {
       });
     });
 
+    app.get("/users/email/:email", async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollection.findOne(
+        { email: email },
+        { projection: { password: 0 } },
+      );
 
-app.get("/users/email/:email", async (req, res) => {
-  const email = req.params.email;
-  const user = await userCollection.findOne({ email: email });
+      if (!user) {
+        return res.status(200).json({
+          success: false,
+          data: null,
+          message: "User not found",
+        });
+      }
 
- if (!user) {
-   return res.status(200).json({
-     success: false,
-     data: null,
-     message: "User not found",
-   });
- }
-
-  res.status(200).json({
-    success: true,
-    data: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      photoURL: user.photoURL,
-      role: user.role,
-    },
-  });
-});
+      res.status(200).json({
+        success: true,
+        data: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          photoURL: user.photoURL,
+          role: user.role,
+        },
+      });
+    });
 
     //Role update admin
     app.patch(
@@ -685,7 +1069,7 @@ app.get("/users/email/:email", async (req, res) => {
 
         await userCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { role } }
+          { $set: { role } },
         );
 
         res.status(200).json({
@@ -693,7 +1077,7 @@ app.get("/users/email/:email", async (req, res) => {
           message: `User role updated to ${role}`,
           modifiedCount: 1,
         });
-      }
+      },
     );
 
     //product Show on home page admin
@@ -712,7 +1096,7 @@ app.get("/users/email/:email", async (req, res) => {
               show_on_homepage: show_on_homepage,
               updatedAt: new Date(),
             },
-          }
+          },
         );
 
         if (result.matchedCount === 0) {
@@ -724,12 +1108,13 @@ app.get("/users/email/:email", async (req, res) => {
 
         res.status(200).json({
           success: true,
-          message: show_on_homepage
-            ? "Product is now shown on home page"
+          message:
+            show_on_homepage ?
+              "Product is now shown on home page"
             : "Product removed from home page",
           data: { show_on_homepage },
         });
-      }
+      },
     );
 
     //user status suspend and approve admin
@@ -750,14 +1135,14 @@ app.get("/users/email/:email", async (req, res) => {
               suspendFeedback,
               updatedAt: new Date(),
             },
-          }
+          },
         );
 
         res.status(200).json({
           success: true,
           message: `User status updated to ${status}`,
         });
-      }
+      },
     );
 
     // ADMIN ANALYTICS WITH FILTERS IN FRONTEND
@@ -814,7 +1199,7 @@ app.get("/users/email/:email", async (req, res) => {
           data: analyticsData,
           message: "Analytics data fetched successfully",
         });
-      }
+      },
     );
 
     //pending order approve reject manager
@@ -838,21 +1223,19 @@ app.get("/users/email/:email", async (req, res) => {
         };
 
         if (status === "approved") {
-          updateData.approvedAt = approvedAt
-            ? new Date(approvedAt)
-            : new Date();
+          updateData.approvedAt =
+            approvedAt ? new Date(approvedAt) : new Date();
         }
 
         if (status === "rejected") {
           updateData.rejectionReason = rejectionReason || "Rejected by manager";
-          updateData.rejectedAt = rejectedAt
-            ? new Date(rejectedAt)
-            : new Date();
+          updateData.rejectedAt =
+            rejectedAt ? new Date(rejectedAt) : new Date();
         }
 
         const result = await orderCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updateData }
+          { $set: updateData },
         );
 
         if (result.matchedCount === 0) {
@@ -870,7 +1253,7 @@ app.get("/users/email/:email", async (req, res) => {
           message: `Order ${status} successfully`,
           data: updatedOrder,
         });
-      }
+      },
     );
 
     //post traking admin manager
@@ -913,7 +1296,7 @@ app.get("/users/email/:email", async (req, res) => {
             $push: { history: trackingEntry },
             $set: { lastUpdated: new Date() },
           },
-          { upsert: true }
+          { upsert: true },
         );
 
         res.status(200).json({
@@ -921,7 +1304,7 @@ app.get("/users/email/:email", async (req, res) => {
           message: "Tracking added successfully",
           data: trackingEntry,
         });
-      }
+      },
     );
 
     //get all order in frontend manager and admin
@@ -967,7 +1350,7 @@ app.get("/users/email/:email", async (req, res) => {
           totalPages: Math.ceil(total / parseInt(limit)),
           limit: parseInt(limit),
         });
-      }
+      },
     );
 
     //admin get order details and tracking history
@@ -1007,16 +1390,14 @@ app.get("/users/email/:email", async (req, res) => {
           Note: log.note || "No additional details",
           location: log.location || "Unknown",
           status:
-            log.status === "product_delivered"
-              ? "completed"
-              : index === trackingDoc.history.length - 1
-              ? "current"
-              : "completed",
+            log.status === "product_delivered" ? "completed"
+            : index === trackingDoc.history.length - 1 ? "current"
+            : "completed",
           date: log.dateTime,
         }));
 
         const sortedTimeline = timeline.sort(
-          (a, b) => new Date(b.date) - new Date(a.date)
+          (a, b) => new Date(b.date) - new Date(a.date),
         );
 
         res.status(200).json({
@@ -1024,14 +1405,17 @@ app.get("/users/email/:email", async (req, res) => {
           data: { order: orderData, timeline: sortedTimeline },
           message: "Timeline fetched successfully",
         });
-      }
+      },
     );
 
     // get role  for AuthProvider and manage user admin
     app.get("/users/role/:email", async (req, res) => {
       const { email } = req.params;
 
-      const user = await userCollection.findOne({ email: email });
+      const user = await userCollection.findOne(
+        { email: email },
+        { projection: { password: 0 } },
+      );
 
       if (!user) {
         return res.status(200).json({
@@ -1082,16 +1466,14 @@ app.get("/users/email/:email", async (req, res) => {
           Note: log.note || "No additional details",
           location: log.location || "Unknown",
           status:
-            log.status === "product_delivered"
-              ? "completed"
-              : index === trackingDoc.history.length - 1
-              ? "current"
-              : "completed",
+            log.status === "product_delivered" ? "completed"
+            : index === trackingDoc.history.length - 1 ? "current"
+            : "completed",
           date: log.dateTime,
         }));
 
         const sortedTimeline = timeline.sort(
-          (a, b) => new Date(b.date) - new Date(a.date)
+          (a, b) => new Date(b.date) - new Date(a.date),
         );
 
         res.status(200).json({
@@ -1099,7 +1481,7 @@ app.get("/users/email/:email", async (req, res) => {
           data: { order: orderData, timeline: sortedTimeline },
           message: "Timeline fetched successfully",
         });
-      }
+      },
     );
 
     // Send ping to confirm a successful connection
@@ -1116,5 +1498,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(port, () => {
-  
+  console.log(`Server running on port ${port}`);
 });
