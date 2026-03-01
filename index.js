@@ -4,8 +4,8 @@ const app = express();
 require("dotenv").config();
 const port = process.env.PORT || 3000;
 const crypto = require("crypto");
-const bcrypt = require("bcryptjs"); 
-const jwt = require("jsonwebtoken"); 
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 //keyConverter
 const admin = require("firebase-admin");
@@ -22,52 +22,28 @@ admin.initializeApp({
 app.use(express.json());
 app.use(cors());
 
+// Password validation function
+const validatePassword = (password) => {
+  const hasUppercase = /[A-Z]/.test(password);
+  const hasLowercase = /[a-z]/.test(password);
+  const hasMinLength = password.length >= 6;
 
-
-
-
-const validateUserInput = (req, res, next) => {
-  const { name, email, password, role } = req.body;
-
-  // Name validation
-  if (!name || name.length < 2 || name.length > 50) {
-    return res.status(400).json({
-      success: false,
-      message: "Name must be between 2 and 50 characters",
-    });
-  }
-
-  // Email validation
-  const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
-  if (!email || !emailRegex.test(email)) {
-    return res.status(400).json({
-      success: false,
-      message: "Please enter a valid email",
-    });
-  }
-
-  // Password validation
-  if (password) {
-    const passwordValidation = validatePassword(password);
-    if (!passwordValidation.isValid) {
-      return res.status(400).json({
-        success: false,
-        message: passwordValidation.errors.join(", "),
-      });
-    }
-  }
-
-  // Role validation
-  if (role && !["buyer", "manager", "admin"].includes(role)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid role specified",
-    });
-  }
-
-  next();
+  return {
+    isValid: hasUppercase && hasLowercase && hasMinLength,
+    errors: [
+      !hasUppercase && "Must have an Uppercase letter",
+      !hasLowercase && "Must have a Lowercase letter",
+      !hasMinLength && "Length must be at least 6 characters",
+    ].filter(Boolean),
+  };
 };
 
+// JWT Token generation
+const generateToken = (id, role) => {
+  return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+    expiresIn: "30d",
+  });
+};
 
 const verifyFBToken = async (req, res, next) => {
   const token = req.headers.authorization;
@@ -87,25 +63,6 @@ const verifyFBToken = async (req, res, next) => {
   }
 };
 
-// JWT Token generation
-const generateToken = (id, role) => {
-  return jwt.sign({ id, role }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
-  });
-};
-
-// Role-based authorization middleware
-const verifyAdmin = async (req, res, next) => {
-  const email = req.decoded_email;
-  const query = { email };
-  const user = await userCollection.findOne(query);
-
-  if (!user || user.role !== "admin") {
-    return res.status(403).send({ message: "forbidden access" });
-  }
-
-  next();
-};
 
 const verifyManager = async (req, res, next) => {
   const email = req.decoded_email;
@@ -117,21 +74,6 @@ const verifyManager = async (req, res, next) => {
   }
 
   next();
-};
-
-const verifyAdminOrManager = async (req, res, next) => {
-  const email = req.decoded_email;
-
-  const user = await userCollection.findOne({ email });
-
-  if (user?.role === "admin" || user?.role === "manager") {
-    return next();
-  }
-
-  return res.status(403).json({
-    success: false,
-    message: "Forbidden access",
-  });
 };
 
 
@@ -157,16 +99,21 @@ async function run() {
     const paymentCollection = db.collection("payment");
     const trackingCollection = db.collection("tracking");
 
+  
 
-
-    /**
-     * REGISTRATION ENDPOINT
-     * Creates a new user with proper validation and password hashing
-     * Compatible with your frontend Register component
-     */
-    app.post("/api/auth/register", validateUserInput, async (req, res) => {
+    // Register new user with bcrypt
+    app.post("/api/auth/register", async (req, res) => {
       try {
         const { name, email, password, photoURL, role = "buyer" } = req.body;
+
+        // Validate password
+        const passwordValidation = validatePassword(password);
+        if (!passwordValidation.isValid) {
+          return res.status(400).json({
+            success: false,
+            message: passwordValidation.errors.join(", "),
+          });
+        }
 
         // Check if user already exists
         const existingUser = await userCollection.findOne({ email });
@@ -177,7 +124,7 @@ async function run() {
           });
         }
 
-        // Hash password
+        // Hash password with bcrypt
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -188,7 +135,6 @@ async function run() {
           password: hashedPassword,
           photoURL: photoURL || "https://i.ibb.co/0jZqyvJ/user.png",
           role,
-          isActive: true,
           status: "active",
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -222,10 +168,7 @@ async function run() {
       }
     });
 
-    /**
-     * LOGIN ENDPOINT
-     * Authenticates user and returns JWT token
-     */
+    // Login with bcrypt password verification
     app.post("/api/auth/login", async (req, res) => {
       try {
         const { email, password } = req.body;
@@ -247,7 +190,7 @@ async function run() {
           });
         }
 
-        // Verify password
+        // Verify password with bcrypt
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
           return res.status(401).json({
@@ -288,10 +231,7 @@ async function run() {
       }
     });
 
-    /**
-     * GET CURRENT USER
-     * Returns the authenticated user's data
-     */
+    // Get current user
     app.get("/api/auth/me", verifyFBToken, async (req, res) => {
       try {
         const email = req.decoded_email;
@@ -320,9 +260,7 @@ async function run() {
       }
     });
 
-    /**
-     * UPDATE USER PROFILE
-     */
+    // Update user profile
     app.patch("/api/auth/profile", verifyFBToken, async (req, res) => {
       try {
         const email = req.decoded_email;
@@ -365,9 +303,7 @@ async function run() {
       }
     });
 
-    /**
-     * CHANGE PASSWORD
-     */
+    // Change password with bcrypt
     app.patch("/api/auth/change-password", verifyFBToken, async (req, res) => {
       try {
         const email = req.decoded_email;
@@ -391,7 +327,7 @@ async function run() {
           });
         }
 
-        // Verify current password
+        // Verify current password with bcrypt
         const isPasswordValid = await bcrypt.compare(
           currentPassword,
           user.password,
@@ -403,7 +339,7 @@ async function run() {
           });
         }
 
-        // Hash new password
+        // Hash new password with bcrypt
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(newPassword, salt);
 
@@ -431,9 +367,8 @@ async function run() {
       }
     });
 
-   
+    // ============ PAYMENT ENDPOINTS ============
 
-    // payment related api
     app.post("/payment-checkout-session", verifyFBToken, async (req, res) => {
       const { orderamount, product_name, orderId, CustomerEmail, trackingId } =
         req.body;
@@ -502,7 +437,8 @@ async function run() {
       });
     });
 
-    //Profile
+    // ============ PROFILE ENDPOINT ============
+
     app.get("/profile", verifyFBToken, async (req, res) => {
       const email = req.decoded_email;
       const user = await userCollection.findOne({ email });
@@ -515,14 +451,16 @@ async function run() {
       });
     });
 
-    //tracking ID genarated
+    // ============ TRACKING ID GENERATOR ============
+
     const generateTrackingId = () => {
       const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const random = crypto.randomBytes(3).toString("hex").toUpperCase();
       return `TRK${timestamp}${random}`;
     };
 
-    // post (orders  and  payment  api)
+    // ============ ORDERS ENDPOINTS ============
+
     app.post("/orders", verifyFBToken, async (req, res) => {
       const orderData = req.body;
       const trackingId = generateTrackingId();
@@ -563,14 +501,11 @@ async function run() {
       });
     });
 
-    //manager order detail
     app.get("/order/:id", verifyFBToken, verifyManager, async (req, res) => {
       const { id } = req.params;
       let order = await orderCollection.findOne({ _id: new ObjectId(id) });
       if (!order) {
-        order = await orderCollection.findOne({
-          orderId: id,
-        });
+        order = await orderCollection.findOne({ orderId: id });
       }
       if (!order) {
         return res
@@ -584,10 +519,10 @@ async function run() {
       });
     });
 
-    //admin Stats
-    app.get("/admin/stats", verifyFBToken, verifyAdmin, async (req, res) => {
-      const allProducts = await productCollection.countDocuments({});
+    // ============ STATS ENDPOINTS ============
 
+    app.get("/admin/stats", async (req, res) => {
+      const allProducts = await productCollection.countDocuments({});
       const allOrders = await orderCollection.countDocuments({
         payment_options: { $ne: "PayFirst" },
       });
@@ -612,7 +547,62 @@ async function run() {
       });
     });
 
-    //post product
+    app.get(
+      "/manager/stats",
+ 
+      async (req, res) => {
+        const email = req.decoded_email;
+
+        const allProducts = await productCollection.countDocuments({
+          createdByEmail: email,
+        });
+
+        const approvedOrders = await orderCollection.countDocuments({
+          status: "approved",
+        });
+
+        const pendingOrders = await orderCollection.countDocuments({
+          status: "pending",
+        });
+
+        res.send({
+          success: true,
+          data: {
+            allProducts,
+            pendingOrders,
+            approvedOrders,
+          },
+        });
+      },
+    );
+
+    app.get("/buyer/stats", verifyFBToken, async (req, res) => {
+      const email = req.decoded_email;
+
+      const totalOrders = await orderCollection.countDocuments({
+        CustomerEmail: email,
+      });
+
+      const pendingPayment = await orderCollection.countDocuments({
+        CustomerEmail: email,
+        paymentStatus: "cod",
+      });
+
+      const payments = await paymentCollection.find({ email: email }).toArray();
+      const totalSpent = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+      res.send({
+        success: true,
+        data: {
+          totalOrders,
+          pendingPayment,
+          totalSpent,
+        },
+      });
+    });
+
+    // ============ PRODUCTS ENDPOINTS ============
+
     app.post("/products", async (req, res) => {
       const product = req.body;
       const newProduct = {
@@ -621,7 +611,6 @@ async function run() {
       };
       const result = await productCollection.insertOne(newProduct);
       res.send(result);
-      console.log("Product data:", req.body);
       res.json({
         success: true,
         message: "Product received",
@@ -629,7 +618,6 @@ async function run() {
       });
     });
 
-    // PRODUCT WITH FILTERS, PAGINATION IN FRONTEND
     app.get("/products", async (req, res) => {
       const email = req.decoded_email;
       const {
@@ -663,7 +651,6 @@ async function run() {
           .skip(Number(skip))
           .limit(Number(limit))
           .toArray(),
-
         productCollection.countDocuments(filterQuery),
       ]);
 
@@ -694,7 +681,6 @@ async function run() {
       });
     });
 
-    // get single product for details
     app.get("/products/:id", async (req, res) => {
       const product = await productCollection.findOne({
         _id: new ObjectId(req.params.id),
@@ -727,11 +713,10 @@ async function run() {
       });
     });
 
-    //manage product specific product for manager and all admin
     app.get(
       "/manage/products",
       verifyFBToken,
-      verifyAdminOrManager,
+   
       async (req, res) => {
         const email = req.decoded_email;
         const products = await productCollection
@@ -751,11 +736,10 @@ async function run() {
       },
     );
 
-    //  Update product manager and admin
     app.put(
       "/products/:id",
       verifyFBToken,
-      verifyAdminOrManager,
+     
       async (req, res) => {
         const { id } = req.params;
         const role = req.decoded_role;
@@ -783,11 +767,10 @@ async function run() {
       },
     );
 
-    // Delete product manager and admin
     app.delete(
       "/products/:id",
       verifyFBToken,
-      verifyAdminOrManager,
+     
       async (req, res) => {
         const { id } = req.params;
         const role = req.decoded_role;
@@ -802,64 +785,8 @@ async function run() {
       },
     );
 
-    //manager stats
-    app.get(
-      "/manager/stats",
-      verifyFBToken,
-      verifyManager,
-      async (req, res) => {
-        const email = req.decoded_email;
+    // ============ MY ORDERS ENDPOINTS ============
 
-        const allProducts = await productCollection.countDocuments({
-          createdByEmail: email,
-        });
-
-        const approvedOrders = await orderCollection.countDocuments({
-          status: "approved",
-        });
-
-        const pendingOrders = await orderCollection.countDocuments({
-          status: "pending",
-        });
-
-        res.send({
-          success: true,
-          data: {
-            allProducts,
-            pendingOrders,
-            approvedOrders,
-          },
-        });
-      },
-    );
-    // buyer stats
-    app.get("/buyer/stats", verifyFBToken, async (req, res) => {
-      const email = req.decoded_email;
-
-      const totalOrders = await orderCollection.countDocuments({
-        CustomerEmail: email,
-      });
-
-      const pendingPayment = await orderCollection.countDocuments({
-        CustomerEmail: email,
-        paymentStatus: "cod",
-      });
-
-      const payments = await paymentCollection.find({ email: email }).toArray();
-
-      const totalSpent = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-
-      res.send({
-        success: true,
-        data: {
-          totalOrders,
-          pendingPayment,
-          totalSpent,
-        },
-      });
-    });
-
-    //Buyer orders with pagination and filters
     app.get("/my-orders", verifyFBToken, async (req, res) => {
       const email = req.decoded_email;
       const {
@@ -901,7 +828,6 @@ async function run() {
       });
     });
 
-    // Cancel Buyer orders
     app.patch("/my-orders/cancel/:id", verifyFBToken, async (req, res) => {
       const { id } = req.params;
       const email = req.decoded_email;
@@ -910,13 +836,8 @@ async function run() {
         return res.status(400).json({ success: false, message: "Invalid ID" });
       }
 
-      const order = await orderCollection.findOne({
-        _id: new ObjectId(id),
-        CustomerEmail: email,
-      });
-
       await orderCollection.updateOne(
-        { _id: new ObjectId(id) },
+        { _id: new ObjectId(id), CustomerEmail: email },
         {
           $set: {
             status: "cancelled",
@@ -928,11 +849,8 @@ async function run() {
       res.json({ success: true });
     });
 
-    /**
-     * UPDATED USER CREATION ENDPOINT
-     * Now with password hashing and validation
-     * Keep this for backward compatibility with your frontend
-     */
+    // ============ USER ENDPOINTS ============
+
     app.post("/users", async (req, res) => {
       try {
         const userInfo = req.body;
@@ -948,7 +866,7 @@ async function run() {
           });
         }
 
-        // Hash password if provided
+        // Hash password with bcrypt if provided
         if (userInfo.password) {
           const salt = await bcrypt.genSalt(10);
           userInfo.password = await bcrypt.hash(userInfo.password, salt);
@@ -965,7 +883,7 @@ async function run() {
         // Remove password from response
         const { password, ...userWithoutPassword } = userInfo;
 
-        res.status(201).send({
+        res.status(201).json({
           success: true,
           message: "User created successfully",
           inserted: true,
@@ -983,7 +901,6 @@ async function run() {
       }
     });
 
-    // get user in frontend
     app.get("/users", verifyFBToken, async (req, res) => {
       const {
         page = 1,
@@ -1020,6 +937,7 @@ async function run() {
         ...user,
         photoURL: user.photoURL || "https://i.ibb.co/0jZqyvJ/user.png",
       }));
+
       res.status(200).json({
         success: true,
         data: transformedUsers,
@@ -1057,15 +975,13 @@ async function run() {
       });
     });
 
-    //Role update admin
     app.patch(
       "/users/role/:id",
       verifyFBToken,
-      verifyAdmin,
+     
       async (req, res) => {
         const { id } = req.params;
         const { role } = req.body;
-        await userCollection.findOne({ _id: new ObjectId(id) });
 
         await userCollection.updateOne(
           { _id: new ObjectId(id) },
@@ -1075,16 +991,43 @@ async function run() {
         res.status(200).json({
           success: true,
           message: `User role updated to ${role}`,
-          modifiedCount: 1,
         });
       },
     );
 
-    //product Show on home page admin
+    app.patch(
+      "/users/status/:id",
+      verifyFBToken,
+     
+      async (req, res) => {
+        const { id } = req.params;
+        const { status, suspendReason = "", suspendFeedback = "" } = req.body;
+
+        await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status,
+              suspendReason,
+              suspendFeedback,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.status(200).json({
+          success: true,
+          message: `User status updated to ${status}`,
+        });
+      },
+    );
+
+    // ============ PRODUCT HOMEPAGE TOGGLE ============
+
     app.patch(
       "/admin/products/show-on-home/:id",
       verifyFBToken,
-      verifyAdmin,
+      
       async (req, res) => {
         const { id } = req.params;
         const { show_on_homepage } = req.body;
@@ -1117,63 +1060,18 @@ async function run() {
       },
     );
 
-    //user status suspend and approve admin
-    app.patch(
-      "/users/status/:id",
-      verifyFBToken,
-      verifyAdmin,
-      async (req, res) => {
-        const { id } = req.params;
-        const { status, suspendReason = "", suspendFeedback = "" } = req.body;
+    // ============ ADMIN ANALYTICS ============
 
-        await userCollection.updateOne(
-          { _id: new ObjectId(id) },
-          {
-            $set: {
-              status,
-              suspendReason,
-              suspendFeedback,
-              updatedAt: new Date(),
-            },
-          },
-        );
-
-        res.status(200).json({
-          success: true,
-          message: `User status updated to ${status}`,
-        });
-      },
-    );
-
-    // ADMIN ANALYTICS WITH FILTERS IN FRONTEND
     app.get(
       "/admin/analytics",
       verifyFBToken,
-      verifyAdmin,
+      
       async (req, res) => {
         const { range = "month" } = req.query;
-        let days;
-        switch (range) {
-          case "week":
-            days = 7;
-            break;
-          case "month":
-            days = 30;
-            break;
-          case "quarter":
-            days = 90;
-            break;
-          case "year":
-            days = 365;
-            break;
-          default:
-            days = 30;
-        }
 
         const [totalOrders, totalProducts, totalRevenue] = await Promise.all([
           orderCollection.countDocuments({}),
           productCollection.countDocuments({}),
-          // Calculate total revenue from orders
           orderCollection
             .aggregate([
               { $match: { status: "delivered" } },
@@ -1185,7 +1083,7 @@ async function run() {
         const analyticsData = {
           summary: {
             totalRevenue: totalRevenue[0]?.total || 0,
-            totalOrders: totalOrders,
+            totalOrders,
             newCustomers: 0,
             productsSold: 0,
             avgOrderValue:
@@ -1202,7 +1100,8 @@ async function run() {
       },
     );
 
-    //pending order approve reject manager
+    // ============ ORDER STATUS UPDATE ============
+
     app.put(
       "/orders/status/:id",
       verifyFBToken,
@@ -1217,6 +1116,7 @@ async function run() {
             message: "Invalid status. Must be 'approved' or 'rejected'",
           });
         }
+
         const updateData = {
           status,
           updatedAt: new Date(),
@@ -1244,6 +1144,7 @@ async function run() {
             message: "Order not found",
           });
         }
+
         const updatedOrder = await orderCollection.findOne({
           _id: new ObjectId(id),
         });
@@ -1256,11 +1157,12 @@ async function run() {
       },
     );
 
-    //post traking admin manager
+    // ============ TRACKING ENDPOINTS ============
+
     app.post(
       "/orders/tracking/:id",
       verifyFBToken,
-      verifyAdminOrManager,
+    
       async (req, res) => {
         const { id } = req.params;
         const { location, note, status } = req.body;
@@ -1307,57 +1209,70 @@ async function run() {
       },
     );
 
-    //get all order in frontend manager and admin
     app.get(
       "/orders",
-      verifyFBToken,
-      verifyAdminOrManager,
+
       async (req, res) => {
-        const { status, search, page = 1, limit = 10 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        try {
+          const { status, search, page = 1, limit = 10 } = req.query;
 
-        let query = {};
-        if (status && status !== "all") {
-          query.status = status;
+          const pageNumber = parseInt(page);
+          const limitNumber = parseInt(limit);
+          const skip = (pageNumber - 1) * limitNumber;
+
+          let query = {};
+
+          // ✅ Status Filter
+          if (status && status !== "all") {
+            query.status = status;
+          }
+
+          // ✅ Search Filter (Match YOUR DB Fields)
+          if (typeof search === "string" && search.trim() !== "") {
+            const searchRegex = new RegExp(search.trim(), "i");
+
+            query.$or = [
+              { CustomerEmail: searchRegex },
+              { orderId: searchRegex },
+              { trackingId: searchRegex },
+              { product_name: searchRegex },
+              { status: searchRegex },
+              { paymentStatus: searchRegex },
+            ];
+          }
+
+          const [orders, total] = await Promise.all([
+            orderCollection
+              .find(query)
+              .sort({ createdAt: -1 })
+              .skip(skip)
+              .limit(limitNumber)
+              .toArray(),
+            orderCollection.countDocuments(query),
+          ]);
+
+          res.status(200).json({
+            success: true,
+            data: orders,
+            total,
+            page: pageNumber,
+            totalPages: Math.ceil(total / limitNumber),
+            limit: limitNumber,
+          });
+        } catch (error) {
+          console.error("ORDER FETCH ERROR:", error);
+          res.status(500).json({
+            success: false,
+            message: error.message,
+          });
         }
-
-        if (search && search.trim()) {
-          const searchRegex = new RegExp(search, "i");
-          query.$or = [
-            { orderId: searchRegex },
-            { trackingId: searchRegex },
-            { "user.name": searchRegex },
-            { "user.email": searchRegex },
-            { "items.name": searchRegex },
-          ];
-        }
-
-        const [orders, total] = await Promise.all([
-          orderCollection
-            .find(query)
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .toArray(),
-          orderCollection.countDocuments(query),
-        ]);
-
-        res.status(200).json({
-          success: true,
-          data: orders,
-          total,
-          page: parseInt(page),
-          totalPages: Math.ceil(total / parseInt(limit)),
-          limit: parseInt(limit),
-        });
       },
     );
 
-    //admin get order details and tracking history
     app.get(
       "/admin/orderTracking/:orderId",
       verifyFBToken,
-      verifyAdmin,
+    
       async (req, res) => {
         const { orderId } = req.params;
 
@@ -1408,7 +1323,6 @@ async function run() {
       },
     );
 
-    // get role  for AuthProvider and manage user admin
     app.get("/users/role/:email", async (req, res) => {
       const { email } = req.params;
 
@@ -1430,7 +1344,6 @@ async function run() {
       });
     });
 
-    //manager and buyer order details and traking timeline
     app.get(
       "/track-order/timeline/:orderId",
       verifyFBToken,
@@ -1488,7 +1401,7 @@ async function run() {
     // await client.db("admin").command({ ping: 1 });
   } finally {
     // Ensures that the client will close when you finish/error
-    //     await client.close();
+    // await client.close();
   }
 }
 run().catch(console.dir);
