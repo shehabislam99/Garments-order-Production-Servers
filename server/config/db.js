@@ -28,6 +28,7 @@ const connectDB = async () => {
     orderCollection: db.collection("orders"),
     paymentCollection: db.collection("payment"),
     trackingCollection: db.collection("tracking"),
+    contactMessageCollection: db.collection("contactMessages"),
   };
 
   return collections;

@@ -12,6 +12,7 @@ const productsRoutes = require("./routes/products.routes");
 const ordersRoutes = require("./routes/orders.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const statsRoutes = require("./routes/stats.routes");
+const contactMessagesRoutes = require("./routes/contactMessages.routes");
 
 const createApp = async () => {
   initializeFirebase();
@@ -43,6 +44,7 @@ const createApp = async () => {
   app.use(ordersRoutes({ collections, authenticate: auth, authorizeRoles }));
   app.use(paymentRoutes({ collections, authenticate: auth }));
   app.use(statsRoutes({ collections, authenticate: auth, authorizeRoles }));
+  app.use(contactMessagesRoutes({ collections }));
 
   app.use((req, res) => {
     res.status(404).json({
