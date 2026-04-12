@@ -35,7 +35,7 @@ const usersRoutes = ({ collections, authenticate, authorizeRoles }) => {
       userInfo.createdAt = new Date();
       userInfo.updatedAt = new Date();
       userInfo.status = userInfo.status || "active";
-      userInfo.role = userInfo.role || "user";
+      userInfo.role = userInfo.role || "buyer";
       userInfo.photoURL = userInfo.photoURL || "https://i.ibb.co/0jZqyvJ/user.png";
 
       const result = await userCollection.insertOne(userInfo);

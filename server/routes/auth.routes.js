@@ -14,9 +14,80 @@ const generateToken = (user) =>
     { expiresIn: process.env.JWT_EXPIRES_IN || "30d" },
   );
 
+const createProfileHandlers = ({ userCollection }) => {
+  const updateProfile = asyncHandler(async (req, res) => {
+    const { name, photoURL } = req.body;
+    const updateData = {
+      ...(name && { name }),
+      ...(photoURL && { photoURL }),
+      updatedAt: new Date(),
+    };
+
+    const result = await userCollection.updateOne(
+      { email: req.user.email },
+      { $set: updateData },
+    );
+
+    if (!result.matchedCount) throw new ApiError(404, "User not found");
+
+    const user = await userCollection.findOne(
+      { email: req.user.email },
+      { projection: { password: 0 } },
+    );
+
+    res.json({
+      success: true,
+      message: "Profile updated successfully",
+      data: user,
+    });
+  });
+
+  const changePassword = asyncHandler(async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.isValid) {
+      throw new ApiError(400, passwordValidation.errors.join(", "));
+    }
+
+    const user = await userCollection.findOne({ email: req.user.email });
+    if (!user) throw new ApiError(404, "User not found");
+    if (!user.password && currentPassword) {
+      throw new ApiError(
+        400,
+        "No password is set for this account; please leave current password blank and just provide a new password.",
+      );
+    }
+    if (!user.password && !currentPassword) {
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await userCollection.updateOne(
+        { _id: user._id },
+        { $set: { password: hashedPassword, updatedAt: new Date() } },
+      );
+      return res.json({ success: true, message: "Password set successfully" });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordValid) throw new ApiError(401, "Current password is incorrect");
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await userCollection.updateOne(
+      { _id: user._id },
+      { $set: { password: hashedPassword, updatedAt: new Date() } },
+    );
+
+    res.json({ success: true, message: "Password changed successfully" });
+  });
+
+  return { updateProfile, changePassword };
+};
+
 const authRoutes = ({ collections, authenticate }) => {
   const router = express.Router();
   const { userCollection } = collections;
+  const { updateProfile, changePassword } = createProfileHandlers({
+    userCollection,
+  });
 
   router.post(
     "/register",
@@ -40,9 +111,9 @@ const authRoutes = ({ collections, authenticate }) => {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const safeRole = ["admin", "manager", "buyer", "user"].includes(role)
+      const safeRole = ["admin", "manager", "buyer"].includes(role)
         ? role
-        : "user";
+        : "buyer";
 
       const newUser = {
         name,
@@ -123,37 +194,7 @@ const authRoutes = ({ collections, authenticate }) => {
     }),
   );
 
-  router.patch(
-    "/profile",
-    authenticate,
-    asyncHandler(async (req, res) => {
-      const { name, photoURL } = req.body;
-      const updateData = {
-        ...(name && { name }),
-        ...(photoURL && { photoURL }),
-        updatedAt: new Date(),
-      };
-
-      const result = await userCollection.updateOne(
-        { email: req.user.email },
-        { $set: updateData },
-      );
-
-      if (!result.matchedCount) throw new ApiError(404, "User not found");
-
-      const user = await userCollection.findOne(
-        { email: req.user.email },
-        { projection: { password: 0 } },
-      );
-
-      res.json({
-        success: true,
-        message: "Profile updated successfully",
-        data: user,
-      });
-    }),
-  );
-
+  router.patch("/profile", authenticate, updateProfile);
   router.patch(
     "/change-password",
     authenticate,
@@ -164,31 +205,26 @@ const authRoutes = ({ collections, authenticate }) => {
       body("newPassword").notEmpty().withMessage("New password is required"),
     ],
     validateRequest,
-    asyncHandler(async (req, res) => {
-      const { currentPassword, newPassword } = req.body;
-
-      const passwordValidation = validatePassword(newPassword);
-      if (!passwordValidation.isValid) {
-        throw new ApiError(400, passwordValidation.errors.join(", "));
-      }
-
-      const user = await userCollection.findOne({ email: req.user.email });
-      if (!user) throw new ApiError(404, "User not found");
-
-      const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
-      if (!isPasswordValid) throw new ApiError(401, "Current password is incorrect");
-
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-      await userCollection.updateOne(
-        { _id: user._id },
-        { $set: { password: hashedPassword, updatedAt: new Date() } },
-      );
-
-      res.json({ success: true, message: "Password changed successfully" });
-    }),
+    changePassword,
   );
 
   return router;
 };
 
-module.exports = authRoutes;
+const profileRoutes = ({ collections, authenticate }) => {
+  const router = express.Router();
+  const { userCollection } = collections;
+  const { updateProfile, changePassword } = createProfileHandlers({
+    userCollection,
+  });
+
+  router.patch("/profile", authenticate, updateProfile);
+  router.patch("/change-password", authenticate, changePassword);
+
+  return router;
+};
+
+module.exports = {
+  authRoutes,
+  profileRoutes,
+};

@@ -79,31 +79,74 @@ const statsRoutes = ({ collections, authenticate, authorizeRoles }) => {
     authenticate,
     authorizeRoles("admin", "manager"),
     asyncHandler(async (req, res) => {
-      const [totalOrders, totalProducts, totalRevenue] = await Promise.all([
+      const [
+        totalOrders,
+        revenueResult,
+        activeUsers,
+        recentOrders,
+        categoryBuckets,
+      ] = await Promise.all([
         orderCollection.countDocuments({}),
-        productCollection.countDocuments({}),
         orderCollection
           .aggregate([
-            { $match: { status: "delivered" } },
-            { $group: { _id: null, total: { $sum: "$totalAmount" } } },
+            {
+              $group: {
+                _id: null,
+                totalRevenue: {
+                  $sum: {
+                    $ifNull: [{ $toDouble: "$totalPrice" }, 0],
+                  },
+                },
+              },
+            },
+          ])
+          .toArray(),
+        userCollection.countDocuments({}),
+        orderCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .toArray(),
+        orderCollection
+          .aggregate([
+            {
+              $group: {
+                _id: {
+                  $ifNull: ["$category", "$product_name", "Uncategorized"],
+                },
+                value: {
+                  $sum: {
+                    $ifNull: [{ $toDouble: "$totalPrice" }, 0],
+                  },
+                },
+              },
+            },
+            { $sort: { value: -1 } },
+            { $limit: 6 },
+            {
+              $project: {
+                category: "$_id",
+                value: 1,
+                _id: 0,
+              },
+            },
           ])
           .toArray(),
       ]);
 
+      const metrics = {
+        totalOrders,
+        revenue: revenueResult[0]?.totalRevenue || 0,
+        activeUsers,
+      };
+
       res.status(200).json({
         success: true,
         data: {
-          summary: {
-            totalRevenue: totalRevenue[0]?.total || 0,
-            totalOrders,
-            newCustomers: 0,
-            productsSold: 0,
-            avgOrderValue:
-              totalOrders > 0 ? (totalRevenue[0]?.total || 0) / totalOrders : 0,
-            conversionRate: 0,
-          },
+          metrics,
+          categories: categoryBuckets,
+          recentOrders,
         },
-        message: "Analytics data fetched successfully",
       });
     }),
   );

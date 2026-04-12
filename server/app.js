@@ -6,14 +6,13 @@ const { connectDB } = require("./config/db");
 const { initializeFirebase } = require("./services/firebase");
 const errorHandler = require("./middleware/errorHandler");
 const { authenticate, authorizeRoles } = require("./middleware/auth");
-const authRoutes = require("./routes/auth.routes");
+const { authRoutes, profileRoutes } = require("./routes/auth.routes");
 const usersRoutes = require("./routes/users.routes");
 const productsRoutes = require("./routes/products.routes");
 const ordersRoutes = require("./routes/orders.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const statsRoutes = require("./routes/stats.routes");
 const contactMessagesRoutes = require("./routes/contactMessages.routes");
-
 const createApp = async () => {
   initializeFirebase();
   const collections = await connectDB();
@@ -39,6 +38,7 @@ const createApp = async () => {
   });
 
   app.use("/api/auth", authRoutes({ collections, authenticate: auth }));
+  app.use("/auth", profileRoutes({ collections, authenticate: auth }));
   app.use(usersRoutes({ collections, authenticate: auth, authorizeRoles }));
   app.use(productsRoutes({ collections, authenticate: auth, authorizeRoles }));
   app.use(ordersRoutes({ collections, authenticate: auth, authorizeRoles }));

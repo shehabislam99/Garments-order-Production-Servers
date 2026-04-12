@@ -16,7 +16,7 @@ const authenticate = (collections) => async (req, res, next) => {
       req.user = {
         id: decoded.id,
         email: decoded.email,
-        role: decoded.role || "user",
+        role: decoded.role || "buyer",
       };
       return next();
     } catch (jwtError) {
@@ -36,7 +36,7 @@ const authenticate = (collections) => async (req, res, next) => {
       req.user = {
         id: user._id.toString(),
         email: user.email,
-        role: user.role || "user",
+        role: user.role || "buyer",
       };
       return next();
     }
